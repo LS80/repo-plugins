@@ -36,6 +36,14 @@ msgctxt "#30005"
 msgid "New Search"
 msgstr ""
 
+msgctxt "#30006"
+msgid "Now"
+msgstr ""
+
+msgctxt "#30007"
+msgid "Next"
+msgstr ""
+
 msgctxt "#30011"
 msgid "Login Error"
 msgstr ""

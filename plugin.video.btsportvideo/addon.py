@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 ###############################################################################
 #
 # MIT License
@@ -32,7 +33,7 @@ import _strptime  # pylint: disable=unused-import
 
 from kodiswift import Plugin, xbmcgui  # pylint: disable=wrong-import-order
 
-from resources.lib import api
+from resources.lib import video, live
 
 
 PAGE_SIZE = 9
@@ -46,7 +47,7 @@ def category_items():
     yield {'label': u'[B]{}[/B]'.format(plugin.get_string(30002)),
            'path': plugin.url_for('search')}
 
-    categories = list(api.categories())
+    categories = list(video.categories())
     yield {'label': u'[B]{}[/B]'.format(plugin.get_string(30001)),
            'path': plugin.url_for('show_videos_by_category_first_page',
                                   path=categories[0].path)}
@@ -70,14 +71,15 @@ def page_link_items(route, page, npages, **kwargs):
 
 
 def video_items(videos):
-    for video in videos:
+    for vid in videos:
         yield {
-            'label': video.title,
-            'thumbnail': video.thumbnail,
-            'path': video.url,
+            'label': vid.title,
+            'thumbnail': vid.thumbnail,
+            'path': vid.url,
             'info': {
-                'date': video.date.strftime('%d.%m.%Y'),
-                'duration': video.duration
+                'date': vid.date.strftime('%d.%m.%Y'),
+                'duration': vid.duration,
+                'plot': vid.description
             },
             'is_playable': True
         }
@@ -101,21 +103,39 @@ def previous_search_items():
         }
 
 
+def program_text(label, program):
+    return u'• {label}   {time}  {title}[CR]{synopsis}'.format(
+        label=u'[UPPERCASE][B]{}[/B][/UPPERCASE]'.format(label),
+        time=program.start,
+        title=u'[COLOR=mediumaquamarine]{}[/COLOR]'.format(program.title),
+        synopsis=program.synopsis
+    )
+
+
+def epg_text(epg):
+    return u'[CR][CR]'.join(
+        program_text(label, program) for label, program in zip(
+            (plugin.get_string(30006), plugin.get_string(30007)),
+            (epg.now, epg.next)
+        )
+    ).encode('utf-8')
+
+
 @plugin.cached(ttl=30)
 def avs_session(user, password):
     if not all((user, password)):
         plugin.open_settings()
 
-    session = api.login(user, password)
+    session = live.login(user, password)
     if session is None:
         xbmcgui.Dialog().ok(plugin.get_string(30011), plugin.get_string(30012))
         return None
-    return api.sport_login(session)
+    return live.sport_login(session)
 
 
 @plugin.cached(ttl=7*24*60) # Cache query text for a week
 def query_text(path):
-    return api.query_text(path)
+    return video.query_text(path)
 
 
 @plugin.route('/')
@@ -127,7 +147,7 @@ def index():
               options={'update_listing': False})
 @plugin.route('/videos/<path>/<page>')
 def show_videos_by_category(path, page='1', update_listing=True):
-    results, npages = api.video_results(query_text(path), int(page), PAGE_SIZE)
+    results, npages = video.video_results(query_text(path), int(page), PAGE_SIZE)
     links = page_link_items('show_videos_by_category', int(page), npages, path=path)
     return show_videos(links, results, update_listing)
 
@@ -137,7 +157,7 @@ def show_videos_by_category(path, page='1', update_listing=True):
 @plugin.route('/search/term/<term>/<page>')
 def show_search_results(term, page='1', update_listing=True):
     plugin.get_storage('searches')[term] = datetime.now()
-    results, npages = api.search_results(term, int(page), PAGE_SIZE)
+    results, npages = video.search_results(term, int(page), PAGE_SIZE)
     links = page_link_items('show_search_results', int(page), npages, term=term)
     return show_videos(links, results, update_listing)
 
@@ -162,31 +182,32 @@ def search():
         yield item
 
 
-@plugin.cached_route('/channels')
+@plugin.route('/channels')
 def channels():
-    return [
-        {
-            'label': u'[B]{}[/B]'.format(channel.name),
-            'path': plugin.url_for('play_channel', channel_id=channel.channel_id),
+    for channel in live.channels():
+        epg = live.epg(channel.epg_index, 'Europe/London')
+        yield {
+            'label': u'[B]{name:}[/B] - {program}'.format(name=channel.name, program=epg.now.title),
+            'path': plugin.url_for('play_channel', channel_id=channel.id),
             'thumbnail': channel.thumbnail,
             'is_playable': True,
             'info': {
-                'title': channel.name
+                'title': epg.now.title,
+                'plot': epg_text(epg)
             }
         }
-        for channel in api.CHANNELS
-    ]
 
 
 @plugin.route('/channels/play/<channel_id>')
 def play_channel(channel_id):
     session = avs_session(plugin.get_setting('user'), plugin.get_setting('password'))
     try:
-        url = api.hls_url(session, channel_id=channel_id)
-    except api.BTError as exc:
+        url = live.hls_url(session, channel_id=channel_id)
+    except live.BTError as exc:
         xbmcgui.Dialog().ok(plugin.get_string(30013), "[COLOR=red]{}[/COLOR]".format(exc))
         url = None
-    plugin.set_resolved_url(url)
+    item = {'path': url, 'thumbnail': live.channels_by_id()[channel_id].thumbnail}
+    plugin.set_resolved_url(item)
 
 
 if __name__ == '__main__':
